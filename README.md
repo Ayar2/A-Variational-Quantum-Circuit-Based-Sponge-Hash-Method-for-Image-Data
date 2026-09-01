@@ -76,10 +76,13 @@ Step 5: HASH OUTPUT
 📁 PROJECT STRUCTURE
 
 Quantum-Sponge-Hash/
+
 ├── qsh_app.py              # Main Streamlit application
+
 ├── requirements.txt        # Python dependencies
-├── README.md               # This file
+
 ├── LICENSE                 # License information
+
 └── Image Test Data/        # Sample images for testing
 
 
