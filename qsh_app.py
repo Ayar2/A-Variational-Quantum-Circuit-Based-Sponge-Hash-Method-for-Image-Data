@@ -216,8 +216,9 @@ st.markdown("""
 
 class QuantumSpongeHash:
     """
-    Quantum Sponge Hash - Singleton Pattern
-    Ensures same VQC parameters are used for all hash operations
+    Proposed QSH - Singleton Pattern.
+    Absorbs 64 complete 128-bit blocks and updates both state halves
+    using two fixed-parameter VQC readouts per block.
     """
     
     _instance = None
@@ -231,31 +232,45 @@ class QuantumSpongeHash:
     
     def __init__(self, n_qubits=8, n_layers=6, seed=42):
         if hasattr(self, '_initialized'):
+            if (n_qubits, n_layers, seed) != (self.n_qubits, self.n_layers, self.seed):
+                raise ValueError("The singleton already uses a different circuit configuration.")
             return
-        
+
+        if n_qubits != 8:
+            raise ValueError("Proposed QSH requires exactly 8 qubits for its 256-bit encoding.")
+        if not isinstance(n_layers, (int, np.integer)) or n_layers < 1:
+            raise ValueError("n_layers must be a positive integer.")
+
         self.n_qubits = n_qubits
         self.n_layers = n_layers
+        self.seed = seed
         self.hash_bits = 128
         self.rate = 128
         self.capacity = 128
         self.state_size = 256
+        self.image_size_bits = 8192
+        self.num_blocks = 64
+        self.rotation_bits = 97
         
-        # Set random seed for reproducibility
-        np.random.seed(seed)
-        torch.manual_seed(seed)
+        # Legacy NumPy generator reproduces seed=42 parameter values without
+        # changing the application's global random state.
+        rng = np.random.RandomState(seed)
         
         # Initialize parameters once (singleton)
         if QuantumSpongeHash._params is None:
             scale = np.sqrt(2.0 / (self.n_qubits * self.n_layers))
-            QuantumSpongeHash._params = np.random.randn(self.n_layers, self.n_qubits, 2) * scale
+            QuantumSpongeHash._params = rng.randn(self.n_layers, self.n_qubits, 2) * scale
         
         self.params = QuantumSpongeHash._params
+        # Reuse one float64 tensor throughout all 128 evaluations per hash.
+        # No optimization or gradient tracking is needed for this fixed map.
+        self._params_tensor = torch.tensor(self.params, dtype=torch.float64)
         
         # Create quantum device
-        self.dev = qml.device('default.qubit', wires=n_qubits)
+        self.dev = qml.device('default.qubit', wires=n_qubits, shots=None)
         
         # Build quantum circuit
-        @qml.qnode(self.dev, interface='torch')
+        @qml.qnode(self.dev, interface='torch', diff_method=None)
         def circuit(inputs, params):
             # Encoding layer: RY gates
             for i in range(self.n_qubits):
@@ -280,12 +295,14 @@ class QuantumSpongeHash:
         """
         Encode 256-bit state to 8 angles for VQC input
         """
+        if len(state_bits) != self.state_size:
+            raise ValueError("State encoding requires exactly 256 bits.")
         chunks = [state_bits[i:i+32] for i in range(0, 256, 32)]
         angles = []
         for chunk in chunks:
             value = 0
             for bit in chunk:
-                value = (value << 1) | bit
+                value = (value << 1) | int(bit)
             angle = np.pi * (value / (2**32 - 1))
             angles.append(angle)
         return angles
@@ -297,6 +314,12 @@ class QuantumSpongeHash:
         """
         bits = []
         for m in measurements:
+            if isinstance(m, torch.Tensor):
+                m = float(m.detach().cpu().item())
+            else:
+                m = float(m)
+            if not np.isfinite(m):
+                raise ValueError("The circuit returned a non-finite expectation value.")
             # Clamp to [-1, 1]
             m_clamped = max(-1.0, min(1.0, m))
             # Map to [0, 65535]
@@ -308,13 +331,34 @@ class QuantumSpongeHash:
     
     def _xor_state_with_block(self, state, block):
         """
-        XOR operation for sponge absorption
+        XOR one complete 128-bit message block into the rate only.
         """
+        if len(state) != self.state_size or len(block) != self.rate:
+            raise ValueError("Absorption requires a 256-bit state and a 128-bit block.")
         rate = state[:self.rate]
         capacity = state[self.rate:]
-        block_left = block[:self.rate]
-        new_rate = [rate[i] ^ block_left[i] for i in range(self.rate)]
+        new_rate = [int(rate[i]) ^ int(block[i]) for i in range(self.rate)]
         return new_rate + capacity
+
+    def _rotate_state(self, state_bits):
+        """Return a new 256-bit list rotated RIGHT by 97 bit positions.
+
+        output[j] = state_bits[(j - 97) % 256].
+        This is a circular bit rotation, not a zero-filled shift.
+        """
+        if len(state_bits) != self.state_size:
+            raise ValueError("State rotation requires exactly 256 bits.")
+        return np.roll(np.asarray(state_bits, dtype=np.uint8), self.rotation_bits).tolist()
+
+    def _quantum_readout(self, state_bits):
+        """Q(T): encode, evaluate the fixed VQC, and quantize to 128 bits."""
+        inputs = self._encode_state_to_inputs(state_bits)
+        with torch.no_grad():
+            measurements = self.qnode(
+                torch.tensor(inputs, dtype=torch.float64),
+                self._params_tensor
+            )
+        return self._measurements_to_bits(measurements)
     
     def _bits_to_hex(self, bits):
         """
@@ -335,31 +379,43 @@ class QuantumSpongeHash:
     
     def hash_image(self, image_bits):
         """
-        Generate hash for image using Quantum Sponge
+        Generate the Proposed QSH digest for an 8192-bit canonical image.
+
+        For each of 64 blocks: T = S XOR (m || 0^128), a = Q(T),
+        d = Q(rotate_right_97(T)), then S = T XOR (a || d).
+        Both readouts use the SAME pre-feedback T. Return the final rate.
         """
-        start_time = time.time()
-        
-        # Split image into 512-bit blocks
-        blocks = [image_bits[i:i+512] for i in range(0, 8192, 512)]
+        start_time = time.perf_counter()
+
+        image_array = np.asarray(image_bits)
+        if image_array.ndim != 1 or image_array.size != self.image_size_bits:
+            raise ValueError("hash_image requires exactly 8192 bits (32x32 grayscale pixels).")
+        if not np.all((image_array == 0) | (image_array == 1)):
+            raise ValueError("image_bits must contain only binary values 0 or 1.")
+        image_bits = image_array.astype(np.uint8).tolist()
+
         state = [0] * self.state_size
         
-        # Absorb phase
-        for block in blocks:
-            state = self._xor_state_with_block(state, block)
-            inputs = self._encode_state_to_inputs(state)
-            measurements = self.qnode(
-                torch.tensor(inputs, dtype=torch.float32),
-                torch.tensor(self.params, dtype=torch.float32)
-            )
-            new_bits = self._measurements_to_bits(measurements)
-            state = new_bits[:self.rate] + state[self.rate:]
+        # Absorb every image bit exactly once, in 64 rate-sized blocks.
+        for b in range(64):
+            block = image_bits[b * self.rate:(b + 1) * self.rate]
+            intermediate_state = self._xor_state_with_block(state, block)
+
+            # Compute BOTH views before updating either the rate or capacity.
+            a = self._quantum_readout(intermediate_state)
+            rotated_T = self._rotate_state(intermediate_state)
+            d = self._quantum_readout(rotated_T)
+
+            # S_new = T XOR (a || d): additive feedback to both state halves.
+            feedback = a + d
+            state = [t ^ f for t, f in zip(intermediate_state, feedback)]
         
         # Squeeze phase
         hash_bits = state[:self.hash_bits]
         hash_hex = self._bits_to_hex(hash_bits)
         hash_binary = ''.join(map(str, hash_bits))
         
-        elapsed_time = time.time() - start_time
+        elapsed_time = time.perf_counter() - start_time
         
         return {
             'hex': hash_hex,
@@ -463,7 +519,7 @@ class ImagePreprocessor:
             bits.extend([int(b) for b in binary])
         
         metadata['total_bits'] = len(bits)
-        metadata['blocks_512'] = len(bits) // 512
+        metadata['blocks_128'] = len(bits) // 128
         
         return bits, metadata
     
@@ -522,6 +578,8 @@ def draw_quantum_circuit():
     
     Input: 8 angles (θ₀, θ₁, ..., θ₇)
     Parameters: 6 layers × 8 qubits × 2 angles
+    Per block: evaluate this same circuit on T and on rotate_right_97(T).
+    Full hash: 64 blocks, 128 circuit evaluations, 256-bit state feedback.
     
     Legend:
         RY(α) = Y-rotation by angle α
@@ -627,6 +685,8 @@ def main():
         st.caption("🧠 **Layers:** 6")
         st.caption("📏 **Hash Size:** 128 bits")
         st.caption("🧽 **State:** 256 bits (R=128, C=128)")
+        st.caption("📦 **Absorption:** 64 blocks (128 bits each)")
+        st.caption("🔄 **Dual View:** 97-bit right rotation")
         
         st.divider()
         
@@ -655,7 +715,7 @@ def main():
         with col_info:
             st.caption(f"**Resized:** 32×32 grayscale")
             st.caption(f"**Total Bits:** {metadata['total_bits']:,}")
-            st.caption(f"**512-bit Blocks:** {metadata['blocks_512']}")
+            st.caption(f"**128-bit Blocks:** {metadata['blocks_128']}")
             st.caption(f"**Pixel Range:** {metadata['pixel_stats']['min']}–{metadata['pixel_stats']['max']}")
             st.caption(f"**Pixel Mean:** {metadata['pixel_stats']['mean']:.1f}")
         
@@ -704,7 +764,8 @@ def main():
         # Avalanche Test
         if enable_avalanche:
             st.divider()
-            st.subheader("🧪 Avalanche Effect Test")
+            st.subheader("🧪 Proposed QSH Avalanche Effect Test")
+            st.caption("Complements all eight bits of one canonical pixel and tests Proposed QSH.")
             
             if st.button("🔥 Run Avalanche Test", type="secondary", use_container_width=True):
                 with st.spinner("Testing avalanche effect..."):
@@ -764,17 +825,19 @@ def main():
         
         #### How it works:
         1. **Image → 32×32 grayscale → 8192 bits**
-        2. **Sponge absorbs 16 blocks (512 bits each)**
-        3. **VQC (8 qubits, 6 layers) acts as permutation**
+        2. **Sponge absorbs 64 blocks (128 bits each)**
+        3. **VQC (8 qubits, 6 layers) mixes two state views per block**
+           - Compute readouts from T and its 97-bit right rotation.
+           - XOR both readouts into the rate and capacity: S = T XOR (a || d).
         4. **Squeeze → 128-bit hash**
         
         #### Key Properties:
         | Property | Description |
         |----------|-------------|
-        | **Avalanche Effect** | ~50% bit change for 1-pixel change |
-        | **Collision Resistance** | Zero collisions on 10,000 images |
-        | **Quantum Resistance** | Designed to resist Grover's algorithm |
-        | **Image-Aware** | Optimized for image data |
+        | **Reported Mean Avalanche** | 48.9% over 200 pixel-complement trials; individual edits vary |
+        | **Sample Uniqueness** | 200 distinct digests on 200 test images; not a security proof |
+        | **Security Scope** | Noiseless diffusion experiment; no proven post-quantum resistance |
+        | **Image-Aware** | Hashes a canonical 32×32 grayscale representation |
         
         #### Original Contribution:
         This implementation is part of the research:
@@ -787,7 +850,7 @@ def main():
     st.divider()
     st.markdown("""
     <div class="footer">
-        🔐 Quantum Sponge Hash v1.0 &nbsp;·&nbsp; 
+        🔐 Proposed QSH v2.0 &nbsp;·&nbsp; 
         <span>Original Work</span> &nbsp;·&nbsp; 
         © 2026 Aya Rafii · JUFE
     </div>
