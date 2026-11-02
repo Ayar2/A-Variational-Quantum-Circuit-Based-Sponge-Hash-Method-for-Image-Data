@@ -115,10 +115,9 @@ Step 3: Test Avalanche Effect (Optional)
 
 📊 EXPECTED RESULTS
 
-Metric                   | QSH (Ours) | SHA-3          | Target
+Metric                   | QSH (Ours)  | SHA-3         | Target
 ----------------------   |------------ |---------      |--------
 Avalanche Effect         | ~48.9%      | ~50.2%        | 50%
-Collision Rate           | 0%          | 0%            | 0%
 Hamming Distance         | ~62.6       | ~64.2         | 64
 Time per Image           | ~248ms      | ~0.01ms       | -
 
