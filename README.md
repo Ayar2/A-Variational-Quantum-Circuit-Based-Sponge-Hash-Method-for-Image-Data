@@ -119,7 +119,7 @@ Metric                   | QSH (Ours)  | SHA-3         | Target
 ----------------------   |------------ |---------      |--------
 Avalanche Effect         | ~48.9%      | ~50.2%        | 50%
 Hamming Distance         | ~62.6       | ~64.2         | 64
-Time per Image           | ~248ms      | ~0.01ms       | -
+Time per Image           | ~248ms      | ~0.1ms       | -
 
 Sample Uniqueness	:  200 distinct / 200 images 
 (Note: Results are based on a 200-image CIFAR-10 sample in noiseless simulation.)
