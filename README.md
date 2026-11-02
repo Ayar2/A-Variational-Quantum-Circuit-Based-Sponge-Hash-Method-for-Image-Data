@@ -3,14 +3,14 @@
 
 📖 OVERVIEW
 
-Quantum Sponge Hash (QSH) is a novel quantum-enhanced hash function for image data. It combines:
+Quantum Sponge Hash (Proposed QSH) is a novel quantum-enhanced hash function for image data. It combines:
 
-- Sponge Construction: Absorbs image data block by block
-- VQC Permutation: 8-qubit Variational Quantum Circuit as nonlinear transformation
-- Image Preprocessing: 32x32 grayscale → 8192 bits
-- 128-bit Hash: Secure output for image authentication
+*   -Sponge-Inspired Construction: Absorbs image data block by block.
+*   -VQC Mixing Map: 8-qubit Variational Quantum Circuit as a nonlinear transformation.
+*   -Image Preprocessing: 32×32 grayscale → 8192 bits.
+*   -128-bit Digest: Secure output for image authentication.
 
-Key Innovation: First VQC-based sponge hash specifically designed for image data.
+Key Innovation: First VQC-based sponge-inspired hash specifically designed for image data, achieving near-ideal diffusion (48.9% avalanche effect).
 
 
 👤 AUTHOR
@@ -25,6 +25,7 @@ Key Innovation: First VQC-based sponge hash specifically designed for image data
 🚀 FEATURES
 
 - Quantum Hash Generation: 8 qubits, 6 layers, RY/RZ rotations + CNOT entanglement
+- Dual-View Absorption: Processes the state and a 97-bit right-rotated view to update both rate and capacity
 - Image Preprocessing: Auto resize to 32x32, grayscale conversion, bit extraction
 - Avalanche Effect Test: Test hash sensitivity to 1-pixel changes
 - SHA-3 Baseline: Compare against classical SHA-3
@@ -43,15 +44,15 @@ Step 2: PREPROCESSING
 - Resize to 32x32 pixels
 - Flatten to 1024 pixel values
 - Convert each pixel (0-255) to 8 bits
-- Result: 8192 bits (16 blocks of 512 bits)
+- Result: 8192 bits (64 blocks of 128 bits)
 
-Step 3: SPONGE ABSORB
-- For each of the 16 blocks:
-  - XOR block into state (256 bits)
-  - Encode state to 8 angles
-  - Apply VQC (8 qubits, 6 layers)
-  - Convert measurements to bits
-  - Update state
+Step 3: DUAL-VIEW SPONGE ABSORB
+ Initialize state \(S = R \parallel C\) (256 bits).
+*   For each of the 64 blocks:
+    1.  XOR the 128-bit block into the rate (R).
+    2.  Compute readout \(a\) from the unrotated intermediate state (T).
+    3.  Compute readout \(d\) from the **97-bit right-rotated** view of T.
+    4.  Update state: \(S_{new} = T \oplus (a \parallel d)\).
 
 Step 4: SQUEEZE
 - Extract first 128 bits of state
@@ -114,12 +115,16 @@ Step 3: Test Avalanche Effect (Optional)
 
 📊 EXPECTED RESULTS
 
-Metric                 | QSH (Ours) | SHA-3    | Target
------------------------|------------|-------   |--------
-Avalanche Effect       | ~49.5%     | ~50.0%   | 50%
-Collision Rate         | 0%         | 0%       | 0%
-Hamming Distance       | ~64        | ~64      | 64
-Time per Image         | ~70ms      | ~0.001ms | -
+Metric                   | QSH (Ours) | SHA-3    | Target
+----------------------  -|------------ |---------|--------
+Avalanche Effect         | ~48.9%      | ~50.2%   | 50%
+Collision Rate           | 0%          | 0%       | 0%
+Hamming Distance         | ~62.6       | ~64.2    | 64
+Time per Image           | ~248ms      | ~0.01ms  | -
+
+Sample Uniqueness	:  200 distinct / 200 images 
+(Note: Results are based on a 200-image CIFAR-10 sample in noiseless simulation.)
+
 
 
 🔬 TECHNICAL DETAILS
@@ -138,12 +143,15 @@ Sponge Configuration:
 - Rate (R): 128 bits
 - Capacity (C): 128 bits
 - Input bits: 8192 bits (1024 pixels x 8)
-- Blocks: 16 blocks of 512 bits
+- Blocks:  64 blocks of 128 bits
+- Second View: 97-bit right rotation
 
 Security Properties:
-- Avalanche Effect: 1-pixel change → ~50% hash bits change
+- Diffusion: 1-pixel change → ~48.9% hash bits change.
+- Input Coverage: Every canonical image bit is absorbed.
 - Collision Resistance: Zero collisions on 10,000 image pairs
 - Quantum Resistance: Designed to resist Grover's algorithm
+- Scope: Evaluation is based on empirical diffusion in noiseless simulation, not a proof of cryptographic security.
 
 
 ⚠️ WINDOWS USERS
@@ -165,7 +173,7 @@ If you get a DLL import error (ImportError: DLL load failed while importing _ufu
 
 If you use this work in your research, please cite:
 
-@mastersthesis{rafii2026qsh,
+@mastersthesispaper{rafii2026qsh,
   author = {Rafii, Aya},
   title = {Robust Image Hash Code Generation Algorithm Based on Quantum Machine Learning},
   school = {Jiangxi University of Finance and Economics},
@@ -193,4 +201,4 @@ If you use this work in your research, please cite:
 All rights reserved. This code is part of original research and should not be copied or replicated without permission.
 
 
-🔐 Quantum Sponge Hash v1.0 | Original Work © 2026 Aya Rafii · JUFE
+🔐 Quantum Sponge Hash v2.0 | Original Work © 2026 Aya Rafii · JUFE
